@@ -7,88 +7,67 @@ import os
 import time
 
 # ==========================================
-# 1. PAGE SETUP & UI CONFIG
+# 1. PAGE SETUP & UI PROTECTION
 # ==========================================
 st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout="wide")
 
-# CSS to hide the "View Source" / GitHub toolbar and hamburger menu
-hide_ui_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            .stApp [data-testid="stToolbar"] {display: none;}
-            </style>
-            """
-st.markdown(hide_ui_style, unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stApp [data-testid="stToolbar"] {display: none;}
+    </style>
+    """, unsafe_allow_html=True)
 
-st.title("🎓 AI Researcher (cater beta 1.1)")
+st.title("🎓 Master's-Level AI Researcher")
 
 # ==========================================
-# 2. ACCESS CONTROL (Sidebar Password)
+# 2. ACCESS CONTROL
 # ==========================================
 with st.sidebar:
     st.header("🔐 Access Control")
     access_key = st.text_input("Enter Access Key", type="password")
-    
-    # If the password doesn't match the one in Streamlit Secrets, stop execution
     if access_key != st.secrets["APP_PASSWORD"]:
-        st.warning("Please enter the correct Access Key to enable the researcher.")
+        st.warning("Please enter the correct Access Key.")
         st.stop()
 
 # ==========================================
-# 3. SESSION STATE (The "Memory")
+# 3. SESSION STATE
 # ==========================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ==========================================
-# 4. SIDEBAR CONTROLS
+# 4. SIDEBAR & FILE UPLOAD
 # ==========================================
 with st.sidebar:
     st.divider()
     st.header("⚙️ Research Context")
-    st.markdown("Upload PDFs to include them in the research analysis.")
-    
-    uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True)
-    
-    st.divider()
+    # UPDATED: Added docx to supported types
+    uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
     
     if st.button("🗑️ Clear Chat / Start Over", type="primary"):
         st.session_state.messages = []
         st.rerun()
 
 # ==========================================
-# 5. AUTHENTICATION & API SETUP
+# 5. AUTHENTICATION
 # ==========================================
-API_KEY = st.secrets["GEMINI_API_KEY"]
-client = genai.Client(api_key=API_KEY)
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ==========================================
 # 6. SYSTEM PROMPTS
 # ==========================================
 agent_a_prompt = """
-Role: You are a highly rigorous, technical research assistant. Your primary directive is absolute factual accuracy. All research must be delivered at the academic and technical depth of a Master's degree graduate.
-
-Core Directives:
-1. Handling Uncertainty: If you lack high confidence, state ONLY: "I cannot provide a reliable answer."
-2. Academic Consensus: If a topic lacks consensus, map out the leading theories citing foundational sources.
-3. Estimations: Never guess. Preface with: "Warning: The following is an estimation."
-4. Blended Sourcing: Use Google Search and User Documents equally. Synthesize facts.
-
-Mandatory Verification Protocol:
-Generate a [VERIFICATION LOG] at the top:
-* Source Check (Web, Docs, or Both)
-* Quote Extraction
-* Consensus Check
-* Confidence Check
----
-Final response follows.
+Role: Master's-Level Research Assistant. 
+Directive: Absolute factual accuracy. Synthesize Google Search and uploaded documents.
+Verification: Generate a [VERIFICATION LOG] at the top checking Sources, Quotes, and Confidence.
 """
 
 agent_b_prompt = """
-You are a ruthless peer reviewer. Review the draft for hallucinations or unsupported claims.
-Output ONLY strict JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL", "feedback": "reason"}
+Role: Ruthless Peer Reviewer. Check for hallucinations.
+Output ONLY JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL", "feedback": "reason"}
 """
 
 # ==========================================
@@ -96,34 +75,42 @@ Output ONLY strict JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL"
 # ==========================================
 
 def process_files(files):
-    """Saves files to temp and uploads to Gemini."""
     gemini_files = []
     for f in files:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        # Detect the extension to create the correct temp file
+        file_extension = os.path.splitext(f.name)[1]
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp:
             tmp.write(f.getbuffer())
             tmp_path = tmp.name
         
-        success = False
-        for attempt in range(3):
-            try:
-                g_file = client.files.upload(
-                    file=tmp_path, 
-                    config={'display_name': f.name}
-                )
-                gemini_files.append(g_file)
-                success = True
-                break 
-            except Exception:
-                time.sleep(2)
-        
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        try:
+            # Upload without forcing a MIME type - let Google detect it
+            g_file = client.files.upload(
+                file=tmp_path, 
+                config={'display_name': f.name}
+            )
             
+            # Polling loop to wait for processing (Important for Word/PDF)
+            while g_file.state.name == "PROCESSING":
+                time.sleep(2)
+                g_file = client.files.get(name=g_file.name)
+            
+            if g_file.state.name == "FAILED":
+                st.error(f"File {f.name} failed to process.")
+                continue
+                
+            gemini_files.append(g_file)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
     return gemini_files
 
 def run_research_pipeline(user_input, chat_history, files):
     status_box = st.empty()
-    status_box.info("Initializing multi-agent analysis...")
+    status_box.info("Researcher is active...")
+
+    MODEL_NAME = 'gemini-2.0-flash'
 
     config_a = types.GenerateContentConfig(
         system_instruction=agent_a_prompt, 
@@ -137,73 +124,63 @@ def run_research_pipeline(user_input, chat_history, files):
         response_mime_type="application/json"
     )
     
-    # 1. Build History
+    # Build History
     contents_a = []
     for msg in chat_history:
         role = "user" if msg["role"] == "user" else "model"
-        contents_a.append({"role": role, "parts": [{"text": msg["content"]}]})
+        contents_a.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
     
-    # 2. Process Files using Part.from_uri to avoid 400 Errors
-    gemini_files = process_files(files) if files else []
+    # Process current parts (Files + Text)
+    current_parts = []
+    if files:
+        processed = process_files(files)
+        for g_file in processed:
+            # We use the MIME type returned by the API after upload
+            current_parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type=g_file.mime_type))
     
-    file_parts = [
-        types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type) 
-        for f in gemini_files
-    ]
-    
-    current_parts = file_parts + [types.Part.from_text(text=user_input)]
-    contents_a.append({"role": "user", "parts": current_parts})
+    current_parts.append(types.Part.from_text(text=user_input))
+    contents_a.append(types.Content(role="user", parts=current_parts))
 
-    # 3. Agent A Phase
-    status_box.info("Agent A is synthesizing data...")
-    response_a = client.models.generate_content(model='gemini-2.5-flash', contents=contents_a, config=config_a)
+    # Agent A
+    status_box.info("Synthesizing research...")
+    response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
     draft_response = response_a.text
     
-    # 4. Agent B Phase (Review Loop)
+    # Agent B loop
     attempt = 0
-    max_retries = 2
-    while attempt < max_retries:
-        status_box.warning(f"Peer Review (Attempt {attempt + 1})...")
-        
-        review_prompt = f"User Query: {user_input}\n\nDraft:\n{draft_response}"
-        response_b = client.models.generate_content(model='gemini-2.5-flash', contents=review_prompt, config=config_b)
+    while attempt < 2:
+        status_box.warning(f"Peer Review (Attempt {attempt+1})...")
+        response_b = client.models.generate_content(
+            model=MODEL_NAME, 
+            contents=f"Review this research for the query '{user_input}':\n\n{draft_response}", 
+            config=config_b
+        )
         
         try:
-            critique_data = json.loads(response_b.text)
-            status = critique_data.get("status")
-            feedback = critique_data.get("feedback")
+            res = json.loads(response_b.text)
+            if res['status'] == "PASS":
+                status_box.success("Research Verified.")
+                return draft_response
+            else:
+                status_box.error(f"Revision needed: {res['feedback']}")
+                rev_prompt = f"Peer review failed: {res['feedback']}. Revise the response."
+                contents_a.append(types.Content(role="model", parts=[types.Part.from_text(text=draft_response)]))
+                contents_a.append(types.Content(role="user", parts=[types.Part.from_text(text=rev_prompt)]))
+                response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
+                draft_response = response_a.text
         except:
-            status = "FAIL"
-            feedback = "Peer review output error."
-            
-        if status == "PASS":
-            status_box.success("Approved by Critic.")
             return draft_response
-        else:
-            status_box.error(f"Review Failed: {feedback}")
-            st.toast("Agent A is revising...")
-            
-            revision_prompt = f"Fix these issues: {feedback}"
-            revision_contents = contents_a + [
-                {"role": "model", "parts": [{"text": draft_response}]}, 
-                {"role": "user", "parts": [{"text": revision_prompt}]}
-            ]
-            
-            response_a_revised = client.models.generate_content(model='gemini-2.5-flash', contents=revision_contents, config=config_a)
-            draft_response = response_a_revised.text
-            
         attempt += 1
-        
     return draft_response
 
 # ==========================================
-# 8. THE CHAT INTERFACE
+# 8. CHAT INTERFACE
 # ==========================================
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Ask a follow-up or research query..."):
+if prompt := st.chat_input("Enter research query..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 

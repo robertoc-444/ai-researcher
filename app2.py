@@ -10,7 +10,14 @@ import time
 # 1. PAGE SETUP & UI CONFIG
 # ==========================================
 st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout="wide")
-st.title("🎓 Master's-Level AI Researcher")
+st.title("🎓 Cater Family AI Researcher with Agenic Validation ")
+# Create a text input for the password
+password = st.sidebar.text_input("Enter Access Key", type="password")
+
+# If the password doesn't match the one in your secrets, stop the app
+if password != st.secrets["APP_PASSWORD"]:
+    st.warning("Please enter the correct Access Key in the sidebar to use this research tool.")
+    st.stop() # This prevents the rest of the code from running
 
 # ==========================================
 # 2. SESSION STATE (The "Memory")

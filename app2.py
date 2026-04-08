@@ -5,12 +5,14 @@ import json
 import tempfile
 import os
 import time
+from docx import Document # Requirement for Word doc processing
 
 # ==========================================
 # 1. PAGE SETUP & UI PROTECTION
 # ==========================================
 st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout="wide")
 
+# CSS to hide the "View Source", "Fork", and Streamlit menu
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -20,7 +22,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🎓 Master's-Level AI Researcher")
+st.title("🎓 AI Researcher (cater beta1.2)")
 
 # ==========================================
 # 2. ACCESS CONTROL
@@ -44,7 +46,6 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.divider()
     st.header("⚙️ Research Context")
-    # UPDATED: Added docx to supported types
     uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
     
     if st.button("🗑️ Clear Chat / Start Over", type="primary"):
@@ -57,58 +58,67 @@ with st.sidebar:
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ==========================================
-# 6. SYSTEM PROMPTS
+# 6. SYSTEM PROMPTS (Restored High Rigor)
 # ==========================================
 agent_a_prompt = """
-Role: Master's-Level Research Assistant. 
-Directive: Absolute factual accuracy. Synthesize Google Search and uploaded documents.
-Verification: Generate a [VERIFICATION LOG] at the top checking Sources, Quotes, and Confidence.
+Role: You are a highly rigorous, technical research assistant. Your primary directive is absolute factual accuracy. All research must be delivered at the academic depth of a Master's degree graduate.
+
+Core Directives:
+1. Handling Uncertainty: If you lack high confidence, state ONLY: "I cannot provide a reliable answer." 
+2. Academic Consensus: If a topic lacks consensus, map out the leading competing theories citing foundational sources.
+3. Estimations: Never guess. Preface with: "Warning: The following is an estimation."
+4. Blended Sourcing: Synthesize Google Search and User Documents into a single cohesive response.
+
+Mandatory Verification Protocol:
+Generate a [VERIFICATION LOG] block at the top containing:
+* Source Check (Web, Docs, or Both)
+* Quote/Canonical Source Extraction
+* Consensus Check
+* Confidence Check
+
+Output a horizontal line (---), then the final response.
 """
 
 agent_b_prompt = """
-Role: Ruthless Peer Reviewer. Check for hallucinations.
-Output ONLY JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL", "feedback": "reason"}
+You are a ruthless peer reviewer. Review the draft for hallucinations or unsupported claims.
+Output ONLY strict JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL", "feedback": "reason"}
 """
 
 # ==========================================
 # 7. THE MULTI-AGENT PIPELINE
 # ==========================================
 
-def process_files(files):
-    gemini_files = []
+def get_docx_text(file):
+    doc = Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def process_files_to_parts(files):
+    """Converts mixed file types into Gemini-compatible Parts."""
+    parts = []
     for f in files:
-        # Detect the extension to create the correct temp file
-        file_extension = os.path.splitext(f.name)[1]
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp:
-            tmp.write(f.getbuffer())
-            tmp_path = tmp.name
-        
-        try:
-            # Upload without forcing a MIME type - let Google detect it
-            g_file = client.files.upload(
-                file=tmp_path, 
-                config={'display_name': f.name}
-            )
-            
-            # Polling loop to wait for processing (Important for Word/PDF)
-            while g_file.state.name == "PROCESSING":
-                time.sleep(2)
-                g_file = client.files.get(name=g_file.name)
-            
-            if g_file.state.name == "FAILED":
-                st.error(f"File {f.name} failed to process.")
-                continue
-                
-            gemini_files.append(g_file)
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    return gemini_files
+        if f.name.endswith('.docx'):
+            text = get_docx_text(f)
+            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{text}"))
+        elif f.name.endswith('.txt'):
+            text = f.read().decode("utf-8")
+            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{text}"))
+        elif f.name.endswith('.pdf'):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(f.getbuffer())
+                tmp_path = tmp.name
+            try:
+                g_file = client.files.upload(file=tmp_path, config={'display_name': f.name})
+                while g_file.state.name == "PROCESSING":
+                    time.sleep(2)
+                    g_file = client.files.get(name=g_file.name)
+                parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
+            finally:
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+    return parts
 
 def run_research_pipeline(user_input, chat_history, files):
     status_box = st.empty()
-    status_box.info("Researcher is active...")
+    status_box.info("Researcher initialized...")
 
     MODEL_NAME = 'gemini-3-flash-preview'
 
@@ -124,52 +134,46 @@ def run_research_pipeline(user_input, chat_history, files):
         response_mime_type="application/json"
     )
     
-    # Build History
+    # 1. Build Conversation History
     contents_a = []
     for msg in chat_history:
         role = "user" if msg["role"] == "user" else "model"
         contents_a.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
     
-    # Process current parts (Files + Text)
-    current_parts = []
-    if files:
-        processed = process_files(files)
-        for g_file in processed:
-            # We use the MIME type returned by the API after upload
-            current_parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type=g_file.mime_type))
-    
+    # 2. Build current interaction parts (Mixed Text/Files)
+    current_parts = process_files_to_parts(files) if files else []
     current_parts.append(types.Part.from_text(text=user_input))
     contents_a.append(types.Content(role="user", parts=current_parts))
 
-    # Agent A
-    status_box.info("Synthesizing research...")
+    # 3. Agent A Draft
+    status_box.info("Agent A is synthesizing web search and document data...")
     response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
     draft_response = response_a.text
     
-    # Agent B loop
+    # 4. Agent B loop
     attempt = 0
     while attempt < 2:
-        status_box.warning(f"Peer Review (Attempt {attempt+1})...")
+        status_box.warning(f"Agent B is conducting Peer Review (Attempt {attempt+1})...")
         response_b = client.models.generate_content(
             model=MODEL_NAME, 
-            contents=f"Review this research for the query '{user_input}':\n\n{draft_response}", 
+            contents=f"Review this for the query '{user_input}':\n\n{draft_response}", 
             config=config_b
         )
         
         try:
             res = json.loads(response_b.text)
             if res['status'] == "PASS":
-                status_box.success("Research Verified.")
+                status_box.success("Final Response Approved.")
                 return draft_response
             else:
-                status_box.error(f"Revision needed: {res['feedback']}")
-                rev_prompt = f"Peer review failed: {res['feedback']}. Revise the response."
+                status_box.error(f"Critic Failed: {res['feedback']}")
+                rev_prompt = f"Peer review failed: {res['feedback']}. Revise the response now."
                 contents_a.append(types.Content(role="model", parts=[types.Part.from_text(text=draft_response)]))
                 contents_a.append(types.Content(role="user", parts=[types.Part.from_text(text=rev_prompt)]))
                 response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
                 draft_response = response_a.text
         except:
-            return draft_response
+            return draft_response # Fallback to draft if logic fails
         attempt += 1
     return draft_response
 

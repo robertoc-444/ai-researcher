@@ -46,6 +46,20 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.divider()
     st.header("⚙️ Research Context")
+# --- PROMPT GUIDE INSERTION ---
+    with st.expander("💡 View Prompting Guide", expanded=False):
+        st.info("Agent A requires Master's level specificity. Use the examples below to avoid 'Low Confidence' errors.")
+        
+        guide_data = [
+            {"Aspect": "Specificity", "❌ Bad": "Tell me about renewable energy.", "✅ Excellent": "Analyze the comparative efficiency and 10-year LCOE between offshore wind and molten salt solar thermal systems."},
+            {"Aspect": "Files", "❌ Bad": "What do these PDFs say?", "✅ Excellent": "Based on the uploaded quarterly reports, synthesize primary risk factors in Section 4 and cross-reference with 2026 market trends."},
+            {"Aspect": "Formatting", "❌ Bad": "Write a quick summary.", "✅ Excellent": "Provide a technical meta-analysis. Structure with an executive summary and a deep-dive into the study methodology."},
+            {"Aspect": "Parametric", "❌ Bad": "How does parametric insurance work?", "✅ Excellent": "Analyze index-based triggers for tropical cyclones. Compare 'cat-in-a-box' vs 'distance-to-site' modeling."},
+            {"Aspect": "Math", "❌ Bad": "Explain the math behind triggers.", "✅ Excellent": "Provide a technical model for calculating drought insurance trigger thresholds based on NDVI."}
+        ]
+        st.table(guide_data)
+    st.divider()
+    # --- END OF GUIDE ---
     uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
     
     if st.button("🗑️ Clear Chat / Start Over", type="primary"):

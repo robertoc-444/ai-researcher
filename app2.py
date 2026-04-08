@@ -22,7 +22,7 @@ hide_ui_style = """
             """
 st.markdown(hide_ui_style, unsafe_allow_html=True)
 
-st.title("🎓 Master's-Level AI Researcher")
+st.title("🎓 AI Researcher (cater beta 1.1)")
 
 # ==========================================
 # 2. ACCESS CONTROL (Sidebar Password)

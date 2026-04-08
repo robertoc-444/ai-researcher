@@ -5,14 +5,14 @@ import json
 import tempfile
 import os
 import time
-from docx import Document # Requirement for Word doc processing
+from docx import Document
 
 # ==========================================
 # 1. PAGE SETUP & UI PROTECTION
 # ==========================================
 st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout="wide")
 
-# CSS to hide the "View Source", "Fork", and Streamlit menu
+# CSS to clean up UI
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -22,189 +22,152 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🎓 AI Researcher (cater beta1.2)")
+st.title("🎓 Professional AI Research Suite (v2.0)")
 
 # ==========================================
-# 2. ACCESS CONTROL
+# 2. SIDEBAR: ACCESS & MODEL CONFIG
 # ==========================================
 with st.sidebar:
-    st.header("🔐 Access Control")
+    st.header("🔐 Access & Brains")
     access_key = st.text_input("Enter Access Key", type="password")
     if access_key != st.secrets["APP_PASSWORD"]:
         st.warning("Please enter the correct Access Key.")
         st.stop()
 
-# ==========================================
-# 3. SESSION STATE
-# ==========================================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# ==========================================
-# 4. SIDEBAR & FILE UPLOAD
-# ==========================================
-with st.sidebar:
     st.divider()
-    st.header("⚙️ Research Context")
-# --- PROMPT GUIDE INSERTION ---
+    
+    # NEW: Model Selection for Agents
+    # Note: Using Vertex AI IDs for Claude
+    gemini_options = ["gemini-1.5-pro", "gemini-2.0-flash", "gemini-3.1-flash-lite"]
+    claude_options = ["claude-3-5-sonnet@20240620", "claude-3-opus@20240229"]
+    
+    st.subheader("🤖 Agent Configuration")
+    model_a_name = st.selectbox("Agent A (Researcher)", options=gemini_options, index=0, help="Gemini 1.5 Pro is recommended for deep research.")
+    model_b_name = st.selectbox("Agent B (Critic)", options=claude_options + gemini_options, index=0, help="Claude is often a more rigorous peer reviewer.")
+
+    st.divider()
+    
+    # PROMPT GUIDE (Your Spreadsheet Data)
     with st.expander("💡 View Prompting Guide", expanded=False):
-        st.info("Agent A requires Master's level specificity. Use the examples below to avoid 'Low Confidence' errors.")
-        
         guide_data = [
-            {"Aspect": "Specificity", "❌ Bad": "Tell me about renewable energy.", "✅ Excellent": "Analyze the comparative efficiency and 10-year LCOE between offshore wind and molten salt solar thermal systems."},
-            {"Aspect": "Files", "❌ Bad": "What do these PDFs say?", "✅ Excellent": "Based on the uploaded quarterly reports, synthesize primary risk factors in Section 4 and cross-reference with 2026 market trends."},
-            {"Aspect": "Formatting", "❌ Bad": "Write a quick summary.", "✅ Excellent": "Provide a technical meta-analysis. Structure with an executive summary and a deep-dive into the study methodology."},
-            {"Aspect": "Parametric", "❌ Bad": "How does parametric insurance work?", "✅ Excellent": "Analyze index-based triggers for tropical cyclones. Compare 'cat-in-a-box' vs 'distance-to-site' modeling."},
-            {"Aspect": "Math", "❌ Bad": "Explain the math behind triggers.", "✅ Excellent": "Provide a technical model for calculating drought insurance trigger thresholds based on NDVI."}
+            {"Aspect": "Specificity", "❌ Bad": "Tell me about renewable energy.", "✅ Excellent": "Analyze the 10-year LCOE between offshore wind and solar thermal."},
+            {"Aspect": "Insurance", "❌ Bad": "How does disaster insurance work?", "✅ Excellent": "Analyze index-based triggers for tropical cyclones vs 'cat-in-a-box' modeling."},
+            {"Aspect": "Files", "❌ Bad": "What's in these PDFs?", "✅ Excellent": "Synthesize risk factors in Section 4 and cross-reference with 2026 market trends."}
         ]
         st.table(guide_data)
-    st.divider()
-    # --- END OF GUIDE ---
+
+    st.header("⚙️ Research Context")
     uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
     
-    if st.button("🗑️ Clear Chat / Start Over", type="primary"):
+    if st.button("🗑️ Clear Chat", type="primary"):
         st.session_state.messages = []
         st.rerun()
 
 # ==========================================
-# 5. AUTHENTICATION
+# 3. AUTHENTICATION & CLIENT
 # ==========================================
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-
-# ==========================================
-# 6. SYSTEM PROMPTS (Restored High Rigor)
-# ==========================================
-agent_a_prompt = """
-Role: You are a highly rigorous, technical research assistant. Your primary directive is absolute factual accuracy. All research must be delivered at the academic depth of a Master's degree graduate.
-
-Core Directives:
-1. Handling Uncertainty: If you lack high confidence, state ONLY: "I cannot provide a reliable answer." 
-2. Academic Consensus: If a topic lacks consensus, map out the leading competing theories citing foundational sources.
-3. Estimations: Never guess. Preface with: "Warning: The following is an estimation."
-4. Blended Sourcing: Synthesize Google Search and User Documents into a single cohesive response.
-
-Mandatory Verification Protocol:
-Generate a [VERIFICATION LOG] block at the top containing:
-* Source Check (Web, Docs, or Both)
-* Quote/Canonical Source Extraction
-* Consensus Check
-* Confidence Check
-
-Output a horizontal line (---), then the final response.
-"""
-
-agent_b_prompt = """
-You are a ruthless peer reviewer. Review the draft for hallucinations or unsupported claims.
-Output ONLY strict JSON: {"status": "PASS", "feedback": ""} OR {"status": "FAIL", "feedback": "reason"}
-"""
+# Initialize the client with Vertex AI support for Claude access
+client = genai.Client(
+    vertexai=True, 
+    project=st.secrets["GOOGLE_CLOUD_PROJECT"], 
+    location=st.secrets["GOOGLE_CLOUD_LOCATION"]
+)
 
 # ==========================================
-# 7. THE MULTI-AGENT PIPELINE
+# 4. SYSTEM PROMPTS
 # ==========================================
+agent_a_prompt = """Role: Technical Research Assistant (Master's Level). 
+Strict Accuracy: If unsure, say "I cannot provide a reliable answer." 
+Output a [VERIFICATION LOG] at the top, then a horizontal line, then the response."""
 
+agent_b_prompt = """Role: Ruthless Peer Reviewer.
+Check for hallucinations. Output ONLY strict JSON: {"status": "PASS", "feedback": ""} or {"status": "FAIL", "feedback": "reason"}"""
+
+# ==========================================
+# 5. THE MULTI-AGENT PIPELINE
+# ==========================================
 def get_docx_text(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
 def process_files_to_parts(files):
-    """Converts mixed file types into Gemini-compatible Parts."""
     parts = []
     for f in files:
         if f.name.endswith('.docx'):
-            text = get_docx_text(f)
-            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{text}"))
+            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{get_docx_text(f)}"))
         elif f.name.endswith('.txt'):
-            text = f.read().decode("utf-8")
-            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{text}"))
+            parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{f.read().decode('utf-8')}"))
         elif f.name.endswith('.pdf'):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(f.getbuffer())
                 tmp_path = tmp.name
-            try:
-                g_file = client.files.upload(file=tmp_path, config={'display_name': f.name})
-                while g_file.state.name == "PROCESSING":
-                    time.sleep(2)
-                    g_file = client.files.get(name=g_file.name)
-                parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
-            finally:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
+            g_file = client.files.upload(file=tmp_path, config={'display_name': f.name})
+            while g_file.state.name == "PROCESSING": time.sleep(1)
+            parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
     return parts
 
-def run_research_pipeline(user_input, chat_history, files):
+def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
     status_box = st.empty()
-    status_box.info("Researcher initialized...")
-
-    MODEL_NAME = 'gemini-3-flash-preview'
+    status_box.info(f"Initializing: {a_model} (Researcher) + {b_model} (Critic)...")
 
     config_a = types.GenerateContentConfig(
         system_instruction=agent_a_prompt, 
         temperature=0.0,
         tools=[types.Tool(google_search=types.GoogleSearch())]
     )
-    
     config_b = types.GenerateContentConfig(
         system_instruction=agent_b_prompt, 
         temperature=0.0, 
         response_mime_type="application/json"
     )
-    
-    # 1. Build Conversation History
+
+    # Build Content
     contents_a = []
     for msg in chat_history:
         role = "user" if msg["role"] == "user" else "model"
         contents_a.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
     
-    # 2. Build current interaction parts (Mixed Text/Files)
     current_parts = process_files_to_parts(files) if files else []
     current_parts.append(types.Part.from_text(text=user_input))
     contents_a.append(types.Content(role="user", parts=current_parts))
 
-    # 3. Agent A Draft
-    status_box.info("Agent A is synthesizing web search and document data...")
-    response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
-    draft_response = response_a.text
+    # Phase 1: Research
+    response_a = client.models.generate_content(model=a_model, contents=contents_a, config=config_a)
+    draft = response_a.text
+
+    # Phase 2: Peer Review
+    status_box.warning(f"Agent B ({b_model}) is conducting Peer Review...")
+    response_b = client.models.generate_content(
+        model=b_model, 
+        contents=f"User Query: {user_input}\n\nDraft:\n{draft}", 
+        config=config_b
+    )
     
-    # 4. Agent B loop
-    attempt = 0
-    while attempt < 2:
-        status_box.warning(f"Agent B is conducting Peer Review (Attempt {attempt+1})...")
-        response_b = client.models.generate_content(
-            model=MODEL_NAME, 
-            contents=f"Review this for the query '{user_input}':\n\n{draft_response}", 
-            config=config_b
-        )
-        
-        try:
-            res = json.loads(response_b.text)
-            if res['status'] == "PASS":
-                status_box.success("Final Response Approved.")
-                return draft_response
-            else:
-                status_box.error(f"Critic Failed: {res['feedback']}")
-                rev_prompt = f"Peer review failed: {res['feedback']}. Revise the response now."
-                contents_a.append(types.Content(role="model", parts=[types.Part.from_text(text=draft_response)]))
-                contents_a.append(types.Content(role="user", parts=[types.Part.from_text(text=rev_prompt)]))
-                response_a = client.models.generate_content(model=MODEL_NAME, contents=contents_a, config=config_a)
-                draft_response = response_a.text
-        except:
-            return draft_response # Fallback to draft if logic fails
-        attempt += 1
-    return draft_response
+    try:
+        res = json.loads(response_b.text)
+        if res['status'] == "PASS":
+            status_box.success("Research Verified.")
+            return draft
+        else:
+            status_box.error(f"Failed Review: {res['feedback']}")
+            return f"**CRITIC FLAG:** {res['feedback']}\n\n---\n\n{draft}"
+    except:
+        return draft
 
 # ==========================================
-# 8. CHAT INTERFACE
+# 6. CHAT INTERFACE
 # ==========================================
+if "messages" not in st.session_state: st.session_state.messages = []
+
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Enter research query..."):
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
+if prompt := st.chat_input("Enter your research query..."):
+    st.chat_message("user").markdown(prompt)
     with st.chat_message("assistant"):
-        final_output = run_research_pipeline(prompt, st.session_state.messages, uploaded_files_ui)
+        final_output = run_research_pipeline(prompt, st.session_state.messages, uploaded_files_ui, model_a_name, model_b_name)
         st.markdown(final_output)
-
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": final_output})

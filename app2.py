@@ -110,7 +110,7 @@ def run_research_pipeline(user_input, chat_history, files):
     status_box = st.empty()
     status_box.info("Researcher is active...")
 
-    MODEL_NAME = 'gemini-2.0-flash'
+    MODEL_NAME = 'gemini-3-flash-preview'
 
     config_a = types.GenerateContentConfig(
         system_instruction=agent_a_prompt, 

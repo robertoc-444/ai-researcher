@@ -1,6 +1,12 @@
 import streamlit as st
 from google import genai
 from google.genai import types
+from google.oauth2 import service_account  # <--- ADD THIS LINE
+import json
+# ... rest of your imports
+import streamlit as st
+from google import genai
+from google.genai import types
 import json
 import tempfile
 import os

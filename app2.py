@@ -2,7 +2,7 @@ import streamlit as st
 from google import genai
 from google.genai import types
 from google.oauth2 import service_account
-from anthropic import AnthropicVertex  # <--- NEW
+from anthropic import AnthropicVertex
 import json
 import tempfile
 import os
@@ -14,15 +14,15 @@ from docx import Document
 # ==========================================
 st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout="wide")
 
-# CSS to clean up UI
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stApp [data-testid="stToolbar"] {display: none;}
-    </style>
-    """, unsafe_allow_html=True)
+# Temporarily commented out to debug the "White Screen" issue
+# st.markdown("""
+#     <style>
+#     #MainMenu {visibility: hidden;}
+#     footer {visibility: hidden;}
+#     header {visibility: hidden;}
+#     .stApp [data-testid="stToolbar"] {display: none;}
+#     </style>
+#     """, unsafe_allow_html=True)
 
 st.title("🎓 Professional AI Research Suite (v2.0)")
 
@@ -32,25 +32,24 @@ st.title("🎓 Professional AI Research Suite (v2.0)")
 with st.sidebar:
     st.header("🔐 Access & Brains")
     access_key = st.text_input("Enter Access Key", type="password")
+    
+    # Must be properly indented so it only stops if the key is wrong!
     if access_key != st.secrets["APP_PASSWORD"]:
         st.warning("Please enter the correct Access Key.")
         st.stop()
 
     st.divider()
     
-    # NEW: Model Selection for Agents
-    # Note: Using Vertex AI IDs for Claude
- # NEW: Updated Model Selection for 2026
+    # 2026 Model Selection 
     gemini_options = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-flash-lite"]
     claude_options = ["claude-3-5-sonnet@20240620", "claude-3-opus@20240229"]
     
     st.subheader("🤖 Agent Configuration")
-    model_a_name = st.selectbox("Agent A (Researcher)", options=gemini_options, index=0, help="Gemini 1.5 Pro is recommended for deep research.")
+    model_a_name = st.selectbox("Agent A (Researcher)", options=gemini_options, index=0, help="Gemini 2.5 Pro is recommended for deep research.")
     model_b_name = st.selectbox("Agent B (Critic)", options=claude_options + gemini_options, index=0, help="Claude is often a more rigorous peer reviewer.")
 
     st.divider()
     
-    # PROMPT GUIDE (Your Spreadsheet Data)
     with st.expander("💡 View Prompting Guide", expanded=False):
         guide_data = [
             {"Aspect": "Specificity", "❌ Bad": "Tell me about renewable energy.", "✅ Excellent": "Analyze the 10-year LCOE between offshore wind and solar thermal."},
@@ -69,13 +68,14 @@ with st.sidebar:
 # ==========================================
 # 3. AUTHENTICATION & CLIENTS
 # ==========================================
+# 1. Load the service account info
 creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
 credentials = service_account.Credentials.from_service_account_info(
     creds_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
 
-# Client A: Google GenAI (For Gemini)
+# 2. Client A: Google GenAI (For Gemini)
 client = genai.Client(
     vertexai=True, 
     project=st.secrets["GOOGLE_CLOUD_PROJECT"], 
@@ -83,7 +83,7 @@ client = genai.Client(
     credentials=credentials
 )
 
-# Client B: Anthropic Vertex (For Claude)
+# 3. Client B: Anthropic Vertex (For Claude)
 anthropic_client = AnthropicVertex(
     project_id=st.secrets["GOOGLE_CLOUD_PROJECT"],
     region=st.secrets["GOOGLE_CLOUD_LOCATION"],
@@ -132,13 +132,14 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
         temperature=0.0,
         tools=[types.Tool(google_search=types.GoogleSearch())]
     )
+    
     config_b = types.GenerateContentConfig(
         system_instruction=agent_b_prompt, 
         temperature=0.0, 
         response_mime_type="application/json"
     )
 
-    # Build Content
+    # Build Content for Agent A
     contents_a = []
     for msg in chat_history:
         role = "user" if msg["role"] == "user" else "model"
@@ -148,40 +149,35 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
     current_parts.append(types.Part.from_text(text=user_input))
     contents_a.append(types.Content(role="user", parts=current_parts))
 
-    # Phase 1: Research
+    # Phase 1: Research (Always Gemini)
     response_a = client.models.generate_content(model=a_model, contents=contents_a, config=config_a)
     draft = response_a.text
 
-# Phase 2: Peer Review
+    # Phase 2: Peer Review (Claude or Gemini)
     status_box.warning(f"Agent B ({b_model}) is conducting Peer Review...")
     
-    # Check if the user selected a Claude model
-    if "claude" in b_model.lower():
-        # Speak Anthropic's language
-        message = anthropic_client.messages.create(
-            model=b_model,
-            max_tokens=1024,
-            system=agent_b_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"User Query: {user_input}\n\nDraft:\n{draft}"
-                }
-            ]
-        )
-        response_b_text = message.content[0].text
-        
-    else:
-        # Speak Gemini's language
-        response_b = client.models.generate_content(
-            model=b_model, 
-            contents=f"User Query: {user_input}\n\nDraft:\n{draft}", 
-            config=config_b
-        )
-        response_b_text = response_b.text
-    
-    # Parse the JSON from whichever agent responded
     try:
+        if "claude" in b_model.lower():
+            # Route to Anthropic Client
+            message = anthropic_client.messages.create(
+                model=b_model,
+                max_tokens=1024,
+                system=agent_b_prompt,
+                messages=[
+                    {"role": "user", "content": f"User Query: {user_input}\n\nDraft:\n{draft}"}
+                ]
+            )
+            response_b_text = message.content[0].text
+        else:
+            # Route to Gemini Client
+            response_b = client.models.generate_content(
+                model=b_model, 
+                contents=f"User Query: {user_input}\n\nDraft:\n{draft}", 
+                config=config_b
+            )
+            response_b_text = response_b.text
+        
+        # Parse the JSON Review
         res = json.loads(response_b_text)
         if res['status'] == "PASS":
             status_box.success("Research Verified.")
@@ -189,9 +185,11 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
         else:
             status_box.error(f"Failed Review: {res['feedback']}")
             return f"**CRITIC FLAG:** {res['feedback']}\n\n---\n\n{draft}"
+            
     except Exception as e:
-        # If it fails to parse JSON, just return the draft with a note
-        return f"*(Peer review format error, returning raw draft)*\n\n{draft}"
+        # Fallback if Agent B fails to return proper JSON
+        status_box.error("Peer Review Formatting Error")
+        return f"*(Peer review bypassed due to format error)*\n\n{draft}"
 
 # ==========================================
 # 6. CHAT INTERFACE

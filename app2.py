@@ -72,11 +72,18 @@ with st.sidebar:
 # ==========================================
 # 3. AUTHENTICATION & CLIENT
 # ==========================================
-# Initialize the client with Vertex AI support for Claude access
+# 1. Load the service account info from your Secrets
+creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
+
+# 2. Convert that info into a proper Credentials object
+credentials = service_account.Credentials.from_service_account_info(creds_info)
+
+# 3. Initialize the Client with Vertex AI enabled
 client = genai.Client(
     vertexai=True, 
     project=st.secrets["GOOGLE_CLOUD_PROJECT"], 
-    location=st.secrets["GOOGLE_CLOUD_LOCATION"]
+    location=st.secrets["GOOGLE_CLOUD_LOCATION"],
+    credentials=credentials
 )
 
 # ==========================================

@@ -179,12 +179,14 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
         
         # Parse the JSON Review
         res = json.loads(response_b_text)
+        
+        # ADDED: Permanent verification stamp logic
         if res['status'] == "PASS":
             status_box.success("Research Verified.")
-            return draft
+            return f"✅ **Peer Review Passed** (Verified by {b_model})\n\n---\n\n{draft}"
         else:
             status_box.error(f"Failed Review: {res['feedback']}")
-            return f"**CRITIC FLAG:** {res['feedback']}\n\n---\n\n{draft}"
+            return f"🚨 **CRITIC FLAG:** {res['feedback']}\n\n---\n\n{draft}"
             
     except Exception as e:
         # Fallback if Agent B fails to return proper JSON

@@ -75,8 +75,12 @@ with st.sidebar:
 # 1. Load the service account info from your Secrets
 creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
 
-# 2. Convert that info into a proper Credentials object
-credentials = service_account.Credentials.from_service_account_info(creds_info)
+# 2. Convert that info into a proper Credentials object with CLOUD SCOPE
+# Added the 'scopes' argument here to fix the RefreshError
+credentials = service_account.Credentials.from_service_account_info(
+    creds_info,
+    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+)
 
 # 3. Initialize the Client with Vertex AI enabled
 client = genai.Client(

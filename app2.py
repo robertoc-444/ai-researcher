@@ -44,7 +44,8 @@ with st.sidebar:
     
     # NEW: Model Selection for Agents
     # Note: Using Vertex AI IDs for Claude
-    gemini_options = ["gemini-1.5-pro", "gemini-2.0-flash", "gemini-3.1-flash-lite"]
+ # NEW: Updated Model Selection for 2026
+    gemini_options = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-flash-lite"]
     claude_options = ["claude-3-5-sonnet@20240620", "claude-3-opus@20240229"]
     
     st.subheader("🤖 Agent Configuration")

@@ -2,6 +2,7 @@ import streamlit as st
 from google import genai
 from google.genai import types
 from google.oauth2 import service_account
+from anthropic import AnthropicVertex  # <--- NEW
 import json
 import tempfile
 import os
@@ -66,23 +67,26 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 3. AUTHENTICATION & CLIENT
+# 3. AUTHENTICATION & CLIENTS
 # ==========================================
-# 1. Load the service account info from your Secrets
 creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
-
-# 2. Convert that info into a proper Credentials object with CLOUD SCOPE
-# Added the 'scopes' argument here to fix the RefreshError
 credentials = service_account.Credentials.from_service_account_info(
     creds_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
 
-# 3. Initialize the Client with Vertex AI enabled
+# Client A: Google GenAI (For Gemini)
 client = genai.Client(
     vertexai=True, 
     project=st.secrets["GOOGLE_CLOUD_PROJECT"], 
     location=st.secrets["GOOGLE_CLOUD_LOCATION"],
+    credentials=credentials
+)
+
+# Client B: Anthropic Vertex (For Claude)
+anthropic_client = AnthropicVertex(
+    project_id=st.secrets["GOOGLE_CLOUD_PROJECT"],
+    region=st.secrets["GOOGLE_CLOUD_LOCATION"],
     credentials=credentials
 )
 
@@ -148,24 +152,46 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
     response_a = client.models.generate_content(model=a_model, contents=contents_a, config=config_a)
     draft = response_a.text
 
-    # Phase 2: Peer Review
+# Phase 2: Peer Review
     status_box.warning(f"Agent B ({b_model}) is conducting Peer Review...")
-    response_b = client.models.generate_content(
-        model=b_model, 
-        contents=f"User Query: {user_input}\n\nDraft:\n{draft}", 
-        config=config_b
-    )
     
+    # Check if the user selected a Claude model
+    if "claude" in b_model.lower():
+        # Speak Anthropic's language
+        message = anthropic_client.messages.create(
+            model=b_model,
+            max_tokens=1024,
+            system=agent_b_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"User Query: {user_input}\n\nDraft:\n{draft}"
+                }
+            ]
+        )
+        response_b_text = message.content[0].text
+        
+    else:
+        # Speak Gemini's language
+        response_b = client.models.generate_content(
+            model=b_model, 
+            contents=f"User Query: {user_input}\n\nDraft:\n{draft}", 
+            config=config_b
+        )
+        response_b_text = response_b.text
+    
+    # Parse the JSON from whichever agent responded
     try:
-        res = json.loads(response_b.text)
+        res = json.loads(response_b_text)
         if res['status'] == "PASS":
             status_box.success("Research Verified.")
             return draft
         else:
             status_box.error(f"Failed Review: {res['feedback']}")
             return f"**CRITIC FLAG:** {res['feedback']}\n\n---\n\n{draft}"
-    except:
-        return draft
+    except Exception as e:
+        # If it fails to parse JSON, just return the draft with a note
+        return f"*(Peer review format error, returning raw draft)*\n\n{draft}"
 
 # ==========================================
 # 6. CHAT INTERFACE

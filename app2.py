@@ -117,14 +117,21 @@ REQUIRED OUTPUT STRUCTURE:
 *Provide EXACT APA citations including Authors, Year, Title, Journal/Book Name, and URL/DOI.*"""
 
 agent_b_prompt = """Role: Principal Investigator & Academic Peer Reviewer.
-Evaluate the draft based on:
-1. Source Quality: Are they high-quality academic/primary sources?
-2. Exact Citations: Is every factual claim supported by an inline [Author, Year]?
-3. Reference List: Are exact URLs/DOIs included?
-4. Grounding: Is the logic based on cited evidence?
+Your job is to relentlessly critique the Researcher's draft before it reaches the user. 
 
-Output ONLY strict JSON: {"status": "PASS", "feedback": ""} or {"status": "FAIL", "feedback": "reason"}. 
-No markdown. No conversation."""
+EVALUATION CRITERIA:
+1. Source Quality: Are the sources cited high-quality (scientific journals, books, primary documents, .edu/.gov) rather than generic websites? (If no -> FAIL)
+2. Exact Citations: Are there factual claims missing inline brackets [Author, Year]? (If yes -> FAIL)
+3. Reference List Accuracy: Are the references formatted academically and do they include exact URLs, journals, or DOIs? (If no -> FAIL)
+4. Grounding: Is the logic based on cited evidence? (If no -> FAIL)
+
+OUTPUT RULES:
+- Output ONLY strict JSON: {"status": "PASS", "feedback": ""} or {"status": "FAIL", "feedback": "reason"}.
+- If you use quotes inside the "feedback" string, you MUST use single quotes (') to avoid breaking the JSON format.
+- DO NOT use markdown code blocks (```json). 
+- DO NOT include puncuation outside the curly brackets.
+- NO conversational text, preambles, or post-scripts. Just the raw JSON brackets."""
+
 
 # ==========================================
 # 5. THE MULTI-AGENT PIPELINE

@@ -40,6 +40,25 @@ with st.sidebar:
     model_a_name = st.selectbox("Agent A (Researcher)", options=gemini_options, index=0)
     model_b_name = st.selectbox("Agent B (Critic)", options=claude_options + gemini_options, index=0)
 
+    st.divider()
+    st.header("🎛️ Agent Parameters")
+
+    # 1. Critic Grading Weights
+    st.subheader("Critic Evaluation Weights (1-10)")
+    st.caption("Adjust how strictly Agent B evaluates the draft.")
+    weight_source = st.slider("Source Quality", min_value=1, max_value=10, value=8)
+    weight_citation = st.slider("Citation Accuracy", min_value=1, max_value=10, value=10)
+    weight_format = st.slider("Formatting/Structure", min_value=1, max_value=10, value=5)
+
+    # 2. Pipeline Controls
+    st.subheader("Pipeline Controls")
+    max_attempts_ui = st.number_input("Max Revision Attempts", min_value=1, max_value=5, value=2)
+    
+    # 3. Model Generation Parameters
+    st.subheader("Model Parameters")
+    temp_a = st.slider("Agent A Temperature (Creativity)", min_value=0.0, max_value=1.0, value=0.1, step=0.05)
+
+    st.divider()
     st.header("⚙️ Research Context")
     uploaded_files_ui = st.file_uploader("Upload Documents", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
     
@@ -73,9 +92,9 @@ anthropic_client = AnthropicVertex(
 # 4. SYSTEM PROMPTS (MASTER'S LEVEL)
 # ==========================================
 # Current Date Note included to prevent "Future Hallucinations"
-agent_a_prompt = f"""Role: Post-Graduate Research Scientist. Current Date: April 2026.
-Synthesize high-quality literature and map scientific consensus. 
-
+agent_a_prompt = f"""Role: Post-Graduate Research Scientist.
+Current Date: April 2026.
+Synthesize high-quality literature and map scientific consensus.
 STRICT RULES:
 1. ACADEMIC SOURCES ONLY: Target journals, books, and gov reports. No generic blogs.
 2. EXACT INLINE CITATIONS: Every claim MUST have an inline citation [Author, Year].
@@ -90,11 +109,16 @@ REQUIRED OUTPUT STRUCTURE:
 ### 🔬 Detailed Evidence & Extraction (Grouped by theme, heavy [Author, Year] citations)
 ### 📚 Reference List (APA format with exact URLs/DOIs)"""
 
-agent_b_prompt = """Role: Principal Investigator. 
-Evaluate based on: Source Quality, Exact Inline Citations [Author, Year], and Reference List accuracy.
+def get_agent_b_prompt(w_source, w_citation, w_format):
+    return f"""Role: Principal Investigator.
+Evaluate the draft based on the following weighted criteria (1-10 scale):
+- Source Quality (Weight: {w_source}/10)
+- Exact Inline Citations [Author, Year] (Weight: {w_citation}/10)
+- Formatting and Reference List Accuracy (Weight: {w_format}/10)
 
-Output ONLY strict JSON: {"status": "PASS", "feedback": ""} or {"status": "FAIL", "feedback": "reason"}.
-If you use quotes in feedback, use single quotes ('). No conversational text. No markdown."""
+Output ONLY strict JSON: {{"status": "PASS", "feedback": ""}} or {{"status": "FAIL", "feedback": "reason"}}.
+If you use quotes in feedback, use single quotes ('). No conversational text.
+No markdown."""
 
 # ==========================================
 # 5. THE PIPELINE & SELF-CORRECTION
@@ -119,9 +143,8 @@ def process_files_to_parts(files):
             parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
     return parts
 
-def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
+def run_research_pipeline(user_input, chat_history, files, a_model, b_model, max_attempts, temp_a, weights):
     status_box = st.empty()
-    max_attempts = 2
     current_attempt = 1
     feedback_loop = ""
 
@@ -143,19 +166,38 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model):
         contents_a.append(types.Content(role="user", parts=current_parts))
 
         # Phase 1: Research
-        config_a = types.GenerateContentConfig(system_instruction=agent_a_prompt, temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
+        config_a = types.GenerateContentConfig(
+            system_instruction=agent_a_prompt, 
+            temperature=temp_a, 
+            tools=[types.Tool(google_search=types.GoogleSearch())]
+        )
         response_a = client.models.generate_content(model=a_model, contents=contents_a, config=config_a)
         draft = response_a.text
 
         # Phase 2: Review
         status_box.warning(f"Attempt {current_attempt}: {b_model} verifying integrity...")
+        dynamic_b_prompt = get_agent_b_prompt(*weights)
+        
         try:
             if "claude" in b_model.lower():
-                message = anthropic_client.messages.create(model=b_model, max_tokens=1024, system=agent_b_prompt, messages=[{"role": "user", "content": f"Query: {user_input}\n\nDraft:\n{draft}"}])
+                message = anthropic_client.messages.create(
+                    model=b_model, 
+                    max_tokens=1024, 
+                    system=dynamic_b_prompt, 
+                    messages=[{"role": "user", "content": f"Query: {user_input}\n\nDraft:\n{draft}"}]
+                )
                 response_b_text = message.content[0].text
             else:
-                config_b = types.GenerateContentConfig(system_instruction=agent_b_prompt, temperature=0.0, response_mime_type="application/json")
-                response_b = client.models.generate_content(model=b_model, contents=f"Query: {user_input}\n\nDraft:\n{draft}", config=config_b)
+                config_b = types.GenerateContentConfig(
+                    system_instruction=dynamic_b_prompt, 
+                    temperature=0.0, 
+                    response_mime_type="application/json"
+                )
+                response_b = client.models.generate_content(
+                    model=b_model, 
+                    contents=f"Query: {user_input}\n\nDraft:\n{draft}", 
+                    config=config_b
+                )
                 response_b_text = response_b.text
             
             # The Indestructible Parser
@@ -190,7 +232,28 @@ for message in st.session_state.messages:
 if prompt := st.chat_input("Enter your research query..."):
     st.chat_message("user").markdown(prompt)
     with st.chat_message("assistant"):
-        final_output = run_research_pipeline(prompt, st.session_state.messages, uploaded_files_ui, model_a_name, model_b_name)
+        weights = (weight_source, weight_citation, weight_format)
+        final_output = run_research_pipeline(
+            prompt, 
+            st.session_state.messages, 
+            uploaded_files_ui, 
+            model_a_name, 
+            model_b_name,
+            max_attempts_ui,
+            temp_a,
+            weights
+        )
         st.markdown(final_output)
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": final_output})
+
+# ==========================================
+# 7. FOOTER
+# ==========================================
+st.divider()
+st.markdown(
+    "<div style='text-align: center; color: gray; font-size: 0.9em; padding-bottom: 20px;'>"
+    "Suggestions for improvement? Contact robert.cater@gmail.com - 2026"
+    "</div>", 
+    unsafe_allow_html=True
+)

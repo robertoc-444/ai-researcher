@@ -3,7 +3,6 @@ from google import genai
 from google.genai import types
 from google.oauth2 import service_account
 from anthropic import AnthropicVertex
-from google.cloud import storage  # NEW IMPORT FOR GCP BUCKETS
 import json
 import tempfile
 import os
@@ -65,6 +64,11 @@ with st.sidebar:
     
     if st.button("🗑️ Clear Chat", type="primary"):
         st.session_state.messages = []
+        # Clear the file cache when clearing the chat
+        if "cached_file_parts" in st.session_state:
+            del st.session_state.cached_file_parts
+        if "uploaded_file_names" in st.session_state:
+            del st.session_state.uploaded_file_names
         st.rerun()
 
 # ==========================================
@@ -130,41 +134,29 @@ def get_docx_text(file):
 
 def process_files_to_parts(files):
     parts = []
-    
-    # Initialize the Storage Client using the app's global credentials
-    storage_client = storage.Client(
-        project=st.secrets["GOOGLE_CLOUD_PROJECT"],
-        credentials=credentials
-    )
-    
-    # !!! IMPORTANT: REPLACE THIS WITH YOUR ACTUAL BUCKET NAME !!!
-    bucket_name = "researcher_cater" 
-    
     for f in files:
+        # 🚨 FIX 1: Explicitly rewind the Streamlit buffer to byte 0 
+        # This prevents the "ValueError: Stream must be at beginning" crash
+        f.seek(0)
+        
         if f.name.endswith('.docx'):
             parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{get_docx_text(f)}"))
         elif f.name.endswith('.txt'):
             parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{f.read().decode('utf-8')}"))
         elif f.name.endswith('.pdf'):
-            # Fetch the bucket object
-            bucket = storage_client.bucket(bucket_name)
-            
-            # Create a unique blob name using a timestamp
-            blob_name = f"{int(time.time())}_{f.name}"
-            blob = bucket.blob(blob_name)
-            
-            # Upload the file directly from Streamlit's memory buffer
-            blob.upload_from_file(f, content_type="application/pdf")
-            
-            # Construct the GS URI
-            gcs_uri = f"gs://{bucket_name}/{blob_name}"
-            
-            # Pass the URI to the Vertex AI model
-            parts.append(types.Part.from_uri(file_uri=gcs_uri, mime_type="application/pdf"))
-            
+            # Note: Sticking with Vertex File API from base code as it manages lifecycle natively
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(f.read())
+                tmp_path = tmp.name
+            g_file = client.files.upload(file=tmp_path, config={'display_name': f.name})
+            while g_file.state.name == "PROCESSING": 
+                time.sleep(1)
+            parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
+            os.remove(tmp_path) # Cleanup local temp file
     return parts
 
-def run_research_pipeline(user_input, chat_history, files, a_model, b_model, max_attempts, temp_a, weights):
+# 🚨 FIX 2: Swap 'files' parameter for 'file_parts' to utilize caching
+def run_research_pipeline(user_input, chat_history, file_parts, a_model, b_model, max_attempts, temp_a, weights):
     status_box = st.empty()
     current_attempt = 1
     feedback_loop = ""
@@ -178,7 +170,9 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model, max
             role = "user" if msg["role"] == "user" else "model"
             contents_a.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
         
-        current_parts = process_files_to_parts(files) if files else []
+        # Pull from the cached file_parts instead of re-processing
+        current_parts = list(file_parts) 
+        
         if feedback_loop:
             instruction = f"REVISION REQUIRED. Previous draft failed: {feedback_loop}\nFix and ensure exact [Author, Year] citations."
             current_parts.append(types.Part.from_text(text=f"{instruction}\n\nQuery: {user_input}"))
@@ -242,9 +236,11 @@ def run_research_pipeline(user_input, chat_history, files, a_model, b_model, max
             return f"*(Review format error - Outputting raw draft)*\n\n{draft}"
 
 # ==========================================
-# 6. CHAT INTERFACE
+# 6. CHAT INTERFACE & CACHING
 # ==========================================
 if "messages" not in st.session_state: st.session_state.messages = []
+if "cached_file_parts" not in st.session_state: st.session_state.cached_file_parts = []
+if "uploaded_file_names" not in st.session_state: st.session_state.uploaded_file_names = []
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -253,11 +249,21 @@ for message in st.session_state.messages:
 if prompt := st.chat_input("Enter your research query..."):
     st.chat_message("user").markdown(prompt)
     with st.chat_message("assistant"):
+        
+        # 🚨 FIX 3: Check if the user uploaded new files, if so process them exactly once
+        current_file_names = [f.name for f in uploaded_files_ui] if uploaded_files_ui else []
+        if st.session_state.uploaded_file_names != current_file_names:
+            with st.spinner("Uploading and processing documents (One-Time)..."):
+                st.session_state.cached_file_parts = process_files_to_parts(uploaded_files_ui) if uploaded_files_ui else []
+                st.session_state.uploaded_file_names = current_file_names
+
         weights = (weight_source, weight_citation, weight_format)
+        
+        # Pass the cached files into the pipeline
         final_output = run_research_pipeline(
             prompt, 
             st.session_state.messages, 
-            uploaded_files_ui, 
+            st.session_state.cached_file_parts, 
             model_a_name, 
             model_b_name,
             max_attempts_ui,
@@ -265,6 +271,7 @@ if prompt := st.chat_input("Enter your research query..."):
             weights
         )
         st.markdown(final_output)
+        
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": final_output})
 

@@ -128,6 +128,9 @@ If the draft fails any criteria, reject it with specific actionable feedback.
 Output ONLY strict JSON: {"status": "PASS", "feedback": ""} or {"status": "FAIL", "feedback": "Specific reason and what to fix"}. 
 DO NOT wrap the response in markdown blocks (```json). DO NOT include any conversational text. Just the raw JSON brackets."""
 
+# ... end of your prompt
+DO NOT include any conversational text. Just the raw JSON brackets."""
+
 # ==========================================
 # 5. THE MULTI-AGENT PIPELINE
 # ==========================================
@@ -135,4 +138,5 @@ def get_docx_text(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
-def
+def process_files_to_parts(files):
+    # This function continues...

@@ -3,6 +3,7 @@ from google import genai
 from google.genai import types
 from google.oauth2 import service_account
 from anthropic import AnthropicVertex
+from google.cloud import storage  # NEW IMPORT FOR GCP BUCKETS
 import json
 import tempfile
 import os
@@ -129,18 +130,38 @@ def get_docx_text(file):
 
 def process_files_to_parts(files):
     parts = []
+    
+    # Initialize the Storage Client using the app's global credentials
+    storage_client = storage.Client(
+        project=st.secrets["GOOGLE_CLOUD_PROJECT"],
+        credentials=credentials
+    )
+    
+    # !!! IMPORTANT: REPLACE THIS WITH YOUR ACTUAL BUCKET NAME !!!
+    bucket_name = "researcher_cater" 
+    
     for f in files:
         if f.name.endswith('.docx'):
             parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{get_docx_text(f)}"))
         elif f.name.endswith('.txt'):
             parts.append(types.Part.from_text(text=f"Content from {f.name}:\n{f.read().decode('utf-8')}"))
         elif f.name.endswith('.pdf'):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(f.getbuffer())
-                tmp_path = tmp.name
-            g_file = client.files.upload(file=tmp_path, config={'display_name': f.name})
-            while g_file.state.name == "PROCESSING": time.sleep(1)
-            parts.append(types.Part.from_uri(file_uri=g_file.uri, mime_type="application/pdf"))
+            # Fetch the bucket object
+            bucket = storage_client.bucket(bucket_name)
+            
+            # Create a unique blob name using a timestamp
+            blob_name = f"{int(time.time())}_{f.name}"
+            blob = bucket.blob(blob_name)
+            
+            # Upload the file directly from Streamlit's memory buffer
+            blob.upload_from_file(f, content_type="application/pdf")
+            
+            # Construct the GS URI
+            gcs_uri = f"gs://{bucket_name}/{blob_name}"
+            
+            # Pass the URI to the Vertex AI model
+            parts.append(types.Part.from_uri(file_uri=gcs_uri, mime_type="application/pdf"))
+            
     return parts
 
 def run_research_pipeline(user_input, chat_history, files, a_model, b_model, max_attempts, temp_a, weights):

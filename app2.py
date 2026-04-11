@@ -24,7 +24,7 @@ st.set_page_config(page_title="Multi-Agent Researcher", page_icon="🎓", layout
 #     </style>
 #     """, unsafe_allow_html=True)
 
-st.title("🎓 Professional AI Research Suite (v2.0)")
+st.title("🎓 AI Research Suite (v2.0, Cater 2026)")
 
 # ==========================================
 # 2. SIDEBAR: ACCESS & MODEL CONFIG
